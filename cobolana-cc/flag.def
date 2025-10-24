@@ -1,0 +1,304 @@
+/*
+   Copyright (C) 2003-2012, 2014-2024 Free Software Foundation, Inc.
+   Written by Keisuke Nishida, Roger While, Simon Sobisch, Ron Norman,
+   Edward Hart
+
+   This file is part of GnuCOBOL.
+
+   The GnuCOBOL compiler is free software: you can redistribute it
+   and/or modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation, either version 3 of the
+   License, or (at your option) any later version.
+
+   GnuCOBOL is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with GnuCOBOL.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+
+/* Compiler flag defines */
+
+/* Normal binary flags (standard: off) */
+/* CB_FLAG    (var, help switch, name, help) */
+
+/* Normal binary flags (standard: on) */
+/* CB_FLAG_ON (var, help switch, name, help) */
+
+/* Flags with required parameter (standard: default) */
+/* CB_FLAG_RQ (var, help switch, name, default, getopt return, help) */
+
+/* Flags with required parameter and no associated variable */
+/* CB_FLAG_NQ (help switch, name, getopt return, help) */
+
+/* Flags with optional parameter and no associated variable */
+/* CB_FLAG_OP (help switch, name, getopt return, help) */
+
+
+/* Flags with required parameter */
+
+CB_FLAG_RQ (cb_stack_size, 0, "stack-size", 255, CB_FLAG_GETOPT_STACK_SIZE,
+	_("  -fstack-size=<number>\tdefine PERFORM stack size\n"
+	  "                       * default: 255"))
+
+CB_FLAG_RQ (cb_ebcdic_sign, 1, "sign", 0, CB_FLAG_GETOPT_SIGN,
+	_("  -fsign=[ASCII|EBCDIC]\tdefine display sign representation\n"
+	  "                        * default: machine native"))
+
+CB_FLAG_RQ (cb_fold_copy, 1, "fold-copy", 0, CB_FLAG_GETOPT_FOLD_COPY,
+	_("  -ffold-copy=[UPPER|LOWER]\tfold COPY subject to value\n"
+	  "                        * default: no transformation"))
+
+CB_FLAG_RQ (cb_fold_call, 1, "fold-call", 0, CB_FLAG_GETOPT_FOLD_CALL,
+	_("  -ffold-call=[UPPER|LOWER]\tfold PROGRAM-ID, CALL, CANCEL subject to value\n"
+	  "                        * default: no transformation"))
+
+CB_FLAG_RQ (cb_max_errors, 1, "max-errors", 20, CB_FLAG_GETOPT_MAX_ERRORS,
+	_("  -fmax-errors=<number>\tmaximum number of errors to report before\n"
+	  "                        compilation is aborted\n"
+	  "                        * default: 20\n"
+	  "                        * if <number> is 0, there's no limit"))
+
+/* Flags with required parameter and no associated variable */
+
+CB_FLAG_NQ (1, "intrinsics", CB_FLAG_GETOPT_INTRINSICS,	/* added to cb_intrinsic_list */
+	_("  -fintrinsics=[ALL|intrinsic function name(,name,...)]\n"
+	  "                        intrinsics to be used without FUNCTION keyword"))
+
+/* note: suppressed help and no translation here to have it local to --debug
+         FIXME: find a better way to handle that */
+CB_FLAG_NQ (0, "ec", CB_FLAG_GETOPT_EC,
+	  "  -fec=<exception-name>\tenable code generation for <exception-name>,\n"
+      "                        sets -fsource-location")
+CB_FLAG_NQ (0, "no-ec", CB_FLAG_GETOPT_NO_EC,
+	  "  -fno-ec=<exception-name>\tdisable code generation for <exception-name>")
+
+CB_FLAG_OP (1, "dump", CB_FLAG_GETOPT_DUMP,
+	_("  -fdump=<scope>        dump data fields on abort, <scope> may be\n"
+	  "                        a combination of: ALL, WS, LS, RD, FD, SC, LO\n"
+	  "                        default if no scope specified: ALL"))
+CB_FLAG_OP (0, "no-dump", CB_FLAG_GETOPT_NO_DUMP,
+	_("  -fno-dump=<scope>     exclude data fields from dumping on abort, <scope> may\n"
+	  "                        be a combination of: ALL, WS, LS, RD, FD, SC, LO\n"
+	  "                        default if no scope specified: ALL"))
+
+
+CB_FLAG_NQ (1, "callfh", CB_FLAG_GETOPT_CALLFH,
+	_("  -fcallfh=<name>       specifies <name> to be used for I/O\n"
+	  "                        as external provided EXTFH interface module"))
+
+CB_FLAG_NQ (1, "sqlschema", CB_FLAG_GETOPT_SQLSCHEMA,	/* stored in cb_sqldb_schema */
+	_("  -fsqlschema=<name>    define database schema name"))
+
+CB_FLAG_NQ (1, "ebcdic-table", CB_FLAG_GETOPT_EBCDIC_TABLE,
+	_("  -febcdic-table=<cconv-table>/<file>\tEBCDIC/ASCII translation table\n"
+	  "                        * e.g. default, ebcdic500_latin1..."))
+
+CB_FLAG_NQ (1, "default-colseq", CB_FLAG_GETOPT_DEFAULT_COLSEQ,
+	_("  -fdefault-colseq=[ASCII|EBCDIC|NATIVE]\tdefine default collating sequence\n"
+	  "                        * default: NATIVE"))
+
+CB_FLAG_NQ (1, "default-file-colseq", CB_FLAG_GETOPT_DEFAULT_FILE_COLSEQ,
+	_("  -fdefault-file-colseq=[ASCII|EBCDIC|NATIVE]\tdefine default file collating sequence\n"
+	  "                        * default: NATIVE"))
+
+/* Binary flags, partially with suppressed help */
+
+CB_FLAG (cb_flag_sql_xfd, 1, "sql",
+	_("  -fsql                 process the XFD directives"))
+
+#if defined (_WIN32) || defined (__CYGWIN__)
+#define COB_SHOW 1
+#else
+#define COB_SHOW 0
+#endif
+CB_FLAG (cb_flag_winmain, COB_SHOW, "winmain",
+	_("  -fwinmain             generate WinMain instead of main when compiling\n"
+	  "                        as executable"))
+#undef COB_SHOW
+
+#ifdef HAVE_ATTRIBUTE_CONSTRUCTOR
+#define CB_FLAG_M CB_FLAG_ON
+#define COB_SHOW 1
+#else
+#define CB_FLAG_M CB_FLAG
+#define COB_SHOW 0
+#endif
+CB_FLAG_M (cb_flag_use_constructor, COB_SHOW, "use-constructor",
+	_("  -fuse-constructor     generate internal one-time code via constructor"))
+#undef CB_FLAG_M
+#undef COB_SHOW
+
+CB_FLAG (cb_flag_computed_goto, 0, "computed-goto",
+	_("  -fcomputed-goto       generate computed goto C statements"))
+
+CB_FLAG (cb_flag_extra_brace, 0, "extra-brace",
+	_("  -fextra-brace         generate extra braces in C source"))
+
+CB_FLAG (cb_flag_correct_numeric, 0, "correct-numeric",
+	_("  -fcorrect-numeric     attempt correction of invalid numeric display items"))
+
+CB_FLAG (cb_flag_stack_on_heap, 0, "stack-on-heap",
+	_("  -fstack-on-heap       PERFORM stack allocated on heap"))
+
+CB_FLAG (cb_flag_stack_extended, 1, "stack-extended",
+	_("  -fstack-extended      store origin of entrypoints and PERFORM\n"
+	  "                        * turned on by --debug/-fdump"))
+
+CB_FLAG_ON (cb_flag_fast_math, 0, "fast-math",
+	_("  -ffast-math           Disables emitting faster arithmetic logic"))
+
+CB_FLAG_ON (cb_flag_fast_compare, 0, "fast-compare",
+	_("  -fno-fast-compare     disables inline comparisions"))
+
+/* Normal flags */
+
+CB_FLAG_ON (cb_flag_remove_unreachable, 1, "remove-unreachable",
+	_("  -fno-remove-unreachable\tdisable remove of unreachable code\n"
+	  "                        * turned off by -g"))
+
+CB_FLAG_ON (cb_flag_inline_intrinsic, 1, "inline-intrinsic",
+	_("  -finline-intrinsic\twhen possible resolve intrinsic FUNCTIONs at compile time"))
+
+CB_FLAG (cb_flag_trace, 1, "trace",
+	_("  -ftrace               generate trace code\n"
+	  "                        * scope: executed SECTION/PARAGRAPH"))
+
+CB_FLAG (cb_flag_traceall, 1, "traceall",
+	_("  -ftraceall            generate trace code\n"
+	  "                        * scope: executed SECTION/PARAGRAPH/STATEMENTS"))
+
+CB_FLAG (cb_flag_symbols, 1, "symtab",
+	_("  -fsymtab              build symbol table for dump/trace/debug"))
+
+CB_FLAG (cb_flag_syntax_only, 1, "syntax-only",
+	_("  -fsyntax-only         syntax error checking only; don't emit any output"))
+
+CB_FLAG (cb_flag_debugging_line, 1, "debugging-line",
+	_("  -fdebugging-line      enable debugging lines\n"
+	  "                        * 'D' in indicator column or floating >>D"))
+
+CB_FLAG (cb_flag_source_location, 1, "source-location",
+	_("  -fsource-location     generate source location code\n"
+	  "                        * turned on by --debug/-ftraceall/-fec/-fdump"))
+
+CB_FLAG (cb_flag_implicit_init, 1, "implicit-init",
+	_("  -fimplicit-init       automatic initialization of the COBOL runtime system"))
+
+CB_FLAG_ON (cb_flag_recursive_check, 1, "recursive-check",
+	_("  -fno-recursive-check  disable check of recursive program call;\n"
+	  "                        effectively compiling as RECURSIVE program"))
+
+CB_FLAG (cb_flag_stack_check, 1, "stack-check",
+	_("  -fstack-check         PERFORM stack checking\n"
+	  "                        * turned on by --debug/-g"))
+
+CB_FLAG_OP (1, "memory-check", CB_FLAG_GETOPT_MEMORY_CHECK,
+	_("  -fmemory-check=<scope>     checks for invalid writes to internal storage,\n"
+	  "                        <scope> may be one of: all, pointer, using, none\n"
+	  "                        * default: none, set to all by --debug"))
+
+CB_FLAG (cb_flag_section_exit_check, 1, "section-exit-check",
+	_("  -fsection-exit-check  check that code execution does not leave the scope of SECTIONs"))
+
+CB_FLAG (cb_flag_implicit_goback_check, 1, "implicit-goback-check",
+	_("  -fimplicit-goback-check\tcheck that code execution does not end implicit at end of PROCEDURE DIVISION"))
+
+CB_FLAG (cb_flag_write_after, 1, "write-after",
+	_("  -fwrite-after         use AFTER 1 for WRITE of LINE SEQUENTIAL\n"
+	  "                        * default: BEFORE 1"))
+
+CB_FLAG (cb_flag_mfcomment, 1, "mfcomment",
+	_("  -fmfcomment           '*' in column 1 treated as comment with listing suppression\n"
+	  "                        * FIXED/COBOL85/VARIABLE format only"))
+
+CB_FLAG (cb_flag_acucomment, 1, "acucomment",
+	_("  -facucomment          '$' in indicator area treated as '*',\n"
+	  "                        '|' treated as floating comment"))
+
+/* note: compatibility for 1.1 "fnotrunc" provided by cobc.c */
+CB_FLAG_ON (cb_flag_trunc, 1, "trunc",
+	_("  -fno-trunc            allow numeric field overflow\n"
+	  "                        * non-ANSI behaviour"))
+
+CB_FLAG (cb_flag_apostrophe, 1, "single-quote",
+	_("  -fsingle-quote        use a single quote (apostrophe) for QUOTE\n"
+	  "                        * default: double quote"))
+
+#if 0 /* deactivated + untranslated as -frelaxed-syntax (compiler configuration) is available */
+CB_FLAG (cb_flag_relaxed_syntax, 1, "relax-syntax",
+	  "  -frelax-syntax        relax syntax checking\n"
+	  "                        * e.g. REDEFINES position")
+#endif
+
+CB_FLAG (cb_flag_optional_file, 1, "optional-file",
+	_("  -foptional-file       treat all files as OPTIONAL\n"
+	  "                        * unless NOT OPTIONAL specified"))
+
+CB_FLAG (cb_flag_static_call, 1, "static-call",
+	_("  -fstatic-call         output static function calls for the CALL statement"))
+
+CB_FLAG_ON (cb_flag_c_decl_for_static_call, 1, "gen-c-decl-static-call",
+	_("  -fno-gen-c-decl-static-call\tdisable generation of C function declarations\n"
+	  "                        for subroutines with static CALL"))
+
+CB_FLAG (cb_flag_c_line_directives, 1, "gen-c-line-directives",
+	_("  -fgen-c-line-directives\tgenerate source location directives in C code;\n"
+	  "                        * turned on by -g/--coverage"))
+
+CB_FLAG (cb_flag_c_labels, 1, "gen-c-labels",
+	_("  -fgen-c-labels        generate extra labels in C sources;\n"
+	  "                        * turned on by -g"))
+
+CB_FLAG (cb_mf_files, 1, "mf-files",
+	 _("  -fmf-files            Sequential & Relative files will match Micro Focus format"))
+
+CB_FLAG_RQ (cb_file_format, 1, "file-format", 0, CB_FLAG_GETOPT_FILE_FORMAT,
+	_("  -ffile-format=[MF|GC]\tdefine default format for Sequential/Relative files\n"
+	  "                        * default: GC"))
+
+CB_FLAG_ON (cb_listing_with_header, 1, "theaders",
+	_("  -fno-theaders         suppress all headers from listing while keeping\n"
+	  "                        page breaks"))
+
+CB_FLAG_ON (cb_listing_with_source, 1, "tsource",
+	_("  -fno-tsource          suppress source from listing"))
+
+CB_FLAG_ON (cb_listing_with_messages, 1, "tmessages",
+	_("  -fno-tmessages        suppress warning and error summary from listing"))
+
+CB_FLAG (cb_listing_symbols, 1, "tsymbols",
+	_("  -ftsymbols            specify symbols in listing"))
+
+CB_FLAG (cb_listing_cmd, 1, "tcmd",
+	_("  -ftcmd                specify command line in listing"))
+
+CB_FLAG (cb_list_datamap, 1, "datamap",
+	_("  -fdatamap             specify symbols DATA MAP in listing"))
+
+CB_FLAG_ON (cb_listing_with_timestamp, 1, "ttimestamp",
+	_("  -fno-ttimestamp       suppress timestamp in listing headers"))
+
+CB_FLAG_NQ (1, "ttitle", CB_FLAG_GETOPT_TTITLE,
+	_("  -fttitle=<title>      set listing title with '_' replaced by spaces;\n"
+	  "                        defaults to package name and version"))
+
+CB_FLAG_ON (cb_diagnostics_show_option, 1, "diagnostics-show-option",
+	_("  -fno-diagnostics-show-option\tsuppress output of option that directly\n"
+	  "                        controls the diagnostic"))
+
+CB_FLAG_ON (cb_diagnostics_show_caret, 1, "diagnostics-show-caret",
+	_("  -fno-diagnostics-show-caret\tdo not display source context on warning/error diagnostic"))
+
+CB_FLAG_ON (cb_diagnostics_show_line_numbers, 1, "diagnostics-show-line-numbers",
+	_("  -fno-diagnostics-show-line-numbers\tsuppress display of line numbers in diagnostics"))
+
+CB_FLAG (cb_diagnostics_absolute_paths, 1, "diagnostics-absolute-paths",
+	_("  -fdiagnostics-absolute-paths\tprint absolute paths in diagnostics"))
+
+CB_FLAG (cb_flag_prof, 1, "prof",
+	_("  -fprof                enable profiling of the COBOL program"))
+

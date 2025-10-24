@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+cobolana-cc/cobolana-cc
+cobolana-cc/parser.c
+cobolana-cc/parser.h
+cobolana-cc/parser.output
+cobolana-cc/scanner.c
+cobolana-cc/ppparse.c
+cobolana-cc/ppparse.h
+cobolana-cc/pplex.c
+
+# Node
+node_modules/
+package-lock.json
+
+# Test artifacts
+test-ledger/
+build/
+zig-out/
+*.log
+test-program-keypair.json

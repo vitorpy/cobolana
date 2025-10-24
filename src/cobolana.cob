@@ -1,0 +1,13 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COBOLANA.
+
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 HELLO-MSG PIC X(14) VALUE "Hello Cobolana".
+       01 MSG-LEN PIC 9(4) COMP VALUE 14.
+
+       PROCEDURE DIVISION.
+           CALL "sol_log_" USING
+               BY REFERENCE HELLO-MSG
+               BY VALUE MSG-LEN.
+           STOP RUN.
