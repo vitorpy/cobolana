@@ -19,3 +19,24 @@ build/
 zig-out/
 *.log
 test-program-keypair.json
+
+# Claude Code
+.claude/
+
+# Parser debug output
+*.output
+
+# Old minimal compiler attempt (superseded by cobolana-cc)
+cobolana-compiler/
+build.sh
+scripts/
+test/
+test_minimal.c
+src/cobol_state.h
+src/libcob_bpf.h
+src/solana_shim.c
+
+# Node/TypeScript (not used in final compiler)
+jest.config.js
+package.json
+tsconfig.json
