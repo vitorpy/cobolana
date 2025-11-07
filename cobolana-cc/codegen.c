@@ -12,6 +12,22 @@
 #include "cobc.h"
 #include "tree.h"
 
+#define MAX_VARIABLES 32
+#define ACCOUNT_DATA_START 0x0060  /* Start offset for variable data in Solana account */
+
+/* Variable storage information */
+struct var_info {
+	const char *name;
+	int offset;        /* Offset in account data */
+	int size;          /* Size in bytes */
+	int reg;           /* Assigned register (0 = not loaded, 2-5 = r2-r5) */
+	int dirty;         /* Needs writeback */
+};
+
+static struct var_info variables[MAX_VARIABLES];
+static int num_variables = 0;
+static int next_offset = ACCOUNT_DATA_START + 1;  /* +1 for initialized flag at offset 0x60 */
+
 /* Helper to sanitize field names for assembly labels */
 static void
 fprintf_sanitized_name(FILE *out, const char *prefix, const char *name)
@@ -26,6 +42,38 @@ fprintf_sanitized_name(FILE *out, const char *prefix, const char *name)
 	}
 }
 
+/* Find variable by name */
+static struct var_info *
+find_variable(const char *name)
+{
+	for (int i = 0; i < num_variables; i++) {
+		if (strcmp(variables[i].name, name) == 0) {
+			return &variables[i];
+		}
+	}
+	return NULL;
+}
+
+/* Add a variable to our tracking table */
+static struct var_info *
+add_variable(const char *name, int size)
+{
+	if (num_variables >= MAX_VARIABLES) {
+		fprintf(stderr, "Error: Too many variables (max %d)\n", MAX_VARIABLES);
+		exit(1);
+	}
+
+	struct var_info *var = &variables[num_variables++];
+	var->name = name;
+	var->offset = next_offset;
+	var->size = size;
+	var->reg = 0;
+	var->dirty = 0;
+
+	next_offset += size;
+	return var;
+}
+
 /*
  * Generate Solana BPF assembly from COBOL AST
  */
@@ -35,9 +83,11 @@ codegen(struct cb_program *prog, const char *translate_name)
 	FILE *out;
 	struct cb_field *f;
 	cb_tree stmt;
-	struct cb_call *call;
 	struct cb_literal *lit;
 
+	/* Reset variable tracking */
+	num_variables = 0;
+	next_offset = ACCOUNT_DATA_START + 1;
 
 	/* Open output file */
 	out = fopen(translate_name, "w");
@@ -50,43 +100,30 @@ codegen(struct cb_program *prog, const char *translate_name)
 	fprintf(out, "# COBOL Program: %s\n\n", prog->program_id);
 
 	/*
-	 * Emit .rodata section with string literals
+	 * First pass: Register all numeric variables
 	 */
-	fprintf(out, ".section .rodata\n");
+	fprintf(out, "# Variable offsets in account data:\n");
 	for (f = prog->working_storage; f; f = f->sister) {
-		/* Skip if no value or not a literal */
-		if (!f->values || !CB_LITERAL_P(f->values)) {
-			continue;
+		/* Only handle numeric fields for now */
+		if (f->usage == CB_USAGE_DISPLAY || f->usage == CB_USAGE_BINARY ||
+		    f->usage == CB_USAGE_COMP_5 || f->usage == CB_USAGE_COMP_X) {
+			/* Determine size - for simplicity, use 8 bytes for all numerics */
+			int size = 8;
+			struct var_info *var = add_variable(f->name, size);
+			fprintf(out, "# %s: offset 0x%04x, size %d\n", var->name, var->offset, var->size);
 		}
-
-		lit = CB_LITERAL(f->values);
-
-		/* Only handle alphanumeric literals */
-		if (CB_TREE_CATEGORY(f->values) != CB_CATEGORY_ALPHANUMERIC) {
-			continue;
-		}
-
-		/* Emit the string data as .ascii directive */
-		fprintf_sanitized_name(out, "msg_", f->name);
-		fprintf(out, ":\n  .ascii \"");
-		for (unsigned int i = 0; i < lit->size; i++) {
-			unsigned char c = lit->data[i];
-			if (c >= 32 && c < 127 && c != '"' && c != '\\') {
-				fprintf(out, "%c", c);
-			} else {
-				fprintf(out, "\\x%02x", c);
-			}
-		}
-		fprintf(out, "\"\n\n");
-
 	}
+	fprintf(out, "\n");
 
 	/*
-	 * Emit .text section
+	 * Emit .text section with entry point
 	 */
 	fprintf(out, ".text\n");
 	fprintf(out, ".globl entrypoint\n\n");
 	fprintf(out, "entrypoint:\n");
+	fprintf(out, "  # Save input parameter pointer (r1) to r6\n");
+	fprintf(out, "  mov64 r6, r1\n");
+	fprintf(out, "\n");
 
 	/* Walk the execution list */
 	for (stmt = prog->exec_list; stmt; stmt = CB_CHAIN(stmt)) {
@@ -94,74 +131,150 @@ codegen(struct cb_program *prog, const char *translate_name)
 
 		/* exec_list is a list of lists - get the actual statement */
 		actual_stmt = CB_VALUE(stmt);
-		if (!actual_stmt) {
-			continue;
-		}
-
-		/* Statements are wrapped in cb_statement structures */
-		if (!CB_STATEMENT_P(actual_stmt)) {
-			continue;
-		}
+		if (!actual_stmt) continue;
+		if (!CB_STATEMENT_P(actual_stmt)) continue;
 
 		body = CB_STATEMENT(actual_stmt)->body;
-		if (!body) {
-			continue;
-		}
+		if (!body) continue;
 
 		/* If body is a list, unwrap it */
 		if (CB_LIST_P(body)) {
 			body = CB_VALUE(body);
-			if (!body) {
+			if (!body) continue;
+		}
+
+		/* Handle ASSIGN statements (arithmetic operations) */
+		if (CB_ASSIGN_P(body)) {
+			struct cb_assign *assign = CB_ASSIGN(body);
+			cb_tree var_tree = assign->var;
+			cb_tree val_tree = assign->val;
+
+			/* Get destination variable */
+			const char *dest_name = NULL;
+			if (CB_REFERENCE_P(var_tree)) {
+				struct cb_reference *ref = CB_REFERENCE(var_tree);
+				if (CB_FIELD_P(ref->value)) {
+					dest_name = CB_FIELD(ref->value)->name;
+				}
+			}
+
+			if (!dest_name) continue;
+
+			struct var_info *dest_var = find_variable(dest_name);
+			if (!dest_var) {
+				fprintf(stderr, "Error: Unknown variable %s\n", dest_name);
 				continue;
 			}
-		}
 
-		if (!CB_CALL_P(body)) {
-			continue;
-		}
+			/* Check if the value is a binary operation */
+			if (CB_BINARY_OP_P(val_tree)) {
+				struct cb_binary_op *binop = CB_BINARY_OP(val_tree);
+				const char *op_str = NULL;
+				const char *sbpf_instr = NULL;
 
-		call = CB_CALL(body);
-
-		/* Check if it's a sol_log_ call */
-		if (CB_LITERAL_P(call->name)) {
-			lit = CB_LITERAL(call->name);
-			if (lit->size == 8 && memcmp(lit->data, "sol_log_", 8) == 0) {
-				/* Get first argument (should be a field reference) */
-				cb_tree arg = NULL;
-				if (call->args && CB_LIST_P(call->args)) {
-					arg = CB_VALUE(call->args);
-				} else {
-					arg = call->args;
+				/* Determine operation */
+				switch (binop->op) {
+					case '+': op_str = "ADD"; sbpf_instr = "add64"; break;
+					case '-': op_str = "SUBTRACT"; sbpf_instr = "sub64"; break;
+					case '*': op_str = "MULTIPLY"; sbpf_instr = "mul64"; break;
+					case '/': op_str = "DIVIDE"; sbpf_instr = "div64"; break;
+					default: continue;
 				}
 
-				if (arg && CB_REFERENCE_P(arg)) {
-					struct cb_reference *ref = CB_REFERENCE(arg);
-					struct cb_field *msg_field = CB_FIELD(ref->value);
-
-					/* Emit sol_log_ syscall */
-					fprintf(out, "  # CALL sol_log_(%s, %d)\n",
-						msg_field->name, msg_field->size);
-					fprintf(out, "  lddw r1, ");
-					fprintf_sanitized_name(out, "msg_", msg_field->name);
-					fprintf(out, "\n  lddw r2, %d\n", msg_field->size);
-					fprintf(out, "  call sol_log_\n");
-
-				} else if (CB_FIELD_P(arg)) {
-					struct cb_field *msg_field = CB_FIELD(arg);
-
-					fprintf(out, "  # CALL sol_log_(%s, %d)\n",
-						msg_field->name, msg_field->size);
-					fprintf(out, "  lddw r1, ");
-					fprintf_sanitized_name(out, "msg_", msg_field->name);
-					fprintf(out, "\n  lddw r2, %d\n", msg_field->size);
-					fprintf(out, "  call sol_log_\n");
-
+				/* Get operand variables */
+				const char *op1_name = NULL, *op2_name = NULL;
+				if (CB_REFERENCE_P(binop->x)) {
+					struct cb_reference *ref = CB_REFERENCE(binop->x);
+					if (CB_FIELD_P(ref->value)) {
+						op1_name = CB_FIELD(ref->value)->name;
+					}
 				}
+				if (CB_REFERENCE_P(binop->y)) {
+					struct cb_reference *ref = CB_REFERENCE(binop->y);
+					if (CB_FIELD_P(ref->value)) {
+						op2_name = CB_FIELD(ref->value)->name;
+					}
+				}
+
+				if (!op1_name || !op2_name) continue;
+
+				struct var_info *op1_var = find_variable(op1_name);
+				struct var_info *op2_var = find_variable(op2_name);
+				if (!op1_var || !op2_var) continue;
+
+				/* Emit comment */
+				fprintf(out, "  # %s: %s = %s %c %s\n",
+					op_str, dest_name, op1_name, binop->op, op2_name);
+
+				/* Load operands into registers */
+				fprintf(out, "  ldxdw r2, [r6 + 0x%x]\n", op1_var->offset);
+				fprintf(out, "  ldxdw r3, [r6 + 0x%x]\n", op2_var->offset);
+
+				/* Perform operation */
+				fprintf(out, "  %s r2, r3\n", sbpf_instr);
+
+				/* Store result */
+				fprintf(out, "  stxdw [r6 + 0x%x], r2\n", dest_var->offset);
+				fprintf(out, "\n");
+			}
+			/* Handle literal assignments */
+			else if (CB_LITERAL_P(val_tree)) {
+				lit = CB_LITERAL(val_tree);
+				if (lit->scale == 0 && CB_TREE_CATEGORY(val_tree) == CB_CATEGORY_NUMERIC) {
+					/* Simple integer literal */
+					long long val = atoll((char*)lit->data);
+					fprintf(out, "  # ASSIGN: %s = %lld\n", dest_name, val);
+					fprintf(out, "  lddw r2, %lld\n", val);
+					fprintf(out, "  stxdw [r6 + 0x%x], r2\n", dest_var->offset);
+					fprintf(out, "\n");
+				}
+			}
+		}
+		/* Handle CALL statements (runtime functions) */
+		else if (CB_FUNCALL_P(body)) {
+			struct cb_funcall *func = CB_FUNCALL(body);
+
+			/* Handle cob_add_int: ADD literal TO variable */
+			if (strcmp(func->name, "cob_add_int") == 0 && func->argc >= 2) {
+				cb_tree var_arg = func->argv[0];  /* Variable being added to */
+				cb_tree val_arg = func->argv[1];  /* Value to add */
+
+				/* Unwrap cast if present */
+				if (CB_CAST_P(val_arg)) {
+					val_arg = CB_CAST(val_arg)->val;
+				}
+
+				if (CB_REFERENCE_P(var_arg)) {
+					struct cb_reference *ref = CB_REFERENCE(var_arg);
+					if (CB_FIELD_P(ref->value)) {
+						const char *var_name = CB_FIELD(ref->value)->name;
+						struct var_info *var = find_variable(var_name);
+
+						if (var && CB_LITERAL_P(val_arg)) {
+							lit = CB_LITERAL(val_arg);
+							long long val = atoll((char*)lit->data);
+
+							fprintf(out, "  # ADD %lld TO %s\n", val, var_name);
+							fprintf(out, "  ldxdw r2, [r6 + 0x%x]\n", var->offset);
+							fprintf(out, "  add64 r2, %lld\n", val);
+							fprintf(out, "  stxdw [r6 + 0x%x], r2\n", var->offset);
+							fprintf(out, "\n");
+						}
+					}
+				}
+			}
+			/* Handle cob_display: DISPLAY variable (TODO: needs more work) */
+			else if (strcmp(func->name, "cob_display") == 0) {
+				/* TODO: Implement DISPLAY statement
+				 * Arguments are complex - need to investigate argument structure
+				 */
+				fprintf(out, "  # TODO: DISPLAY statement\n");
 			}
 		}
 	}
 
-	/* Exit program */
+	/* Success exit */
+	fprintf(out, "  lddw r0, 0\n");
 	fprintf(out, "  exit\n");
 
 	fclose(out);
