@@ -149,6 +149,19 @@ describe('Counter - COBOL Counter on Solana', () => {
   }, 60000); // 60 second timeout
 
   afterAll(async () => {
+    if (connection)
+    {
+      try {
+        // Close the internal WebSocket to prevent Jest from hanging
+        const conn = connection as any;
+        if (conn._rpcWebSocket) {
+          conn._rpcWebSocket.close();
+        }
+      } catch (e) {
+        // Ignore errors during cleanup
+      }
+    }
+
     // Stop solana-test-validator
     try {
       execSync('pkill -f solana-test-validator');
@@ -158,8 +171,9 @@ describe('Counter - COBOL Counter on Solana', () => {
   });
 
   it('should increment counter on each call', async () => {
-    // Counter is at offset 0x71 (based on codegen output)
-    const COUNTER_OFFSET = 0x71;
+    // Counter is at offset 0x71 in input buffer, which is 0x71 - 0x60 = 0x11 in account data
+    // (0x60 is where Solana account data starts in the input parameter buffer)
+    const COUNTER_OFFSET = 0x71 - 0x60; // = 0x11
 
     // Read initial counter value (should be 0)
     let accountInfo = await connection.getAccountInfo(counterAccount.publicKey);
@@ -201,6 +215,10 @@ describe('Counter - COBOL Counter on Solana', () => {
         maxSupportedTransactionVersion: 0,
       });
 
+      // Print transaction logs for debugging
+      const logs = txDetails?.meta?.logMessages || [];
+      console.log(`Transaction ${i} logs:`, logs.join('\n'));
+
       expect(txDetails?.meta?.err).toBeNull();
 
       // Read updated counter value
@@ -218,7 +236,7 @@ describe('Counter - COBOL Counter on Solana', () => {
   });
 
   it('should persist counter across multiple transactions', async () => {
-    const COUNTER_OFFSET = 0x71;
+    const COUNTER_OFFSET = 0x71 - 0x60; // Account data offset
 
     // Get current counter value (should be 5 from previous test)
     let accountInfo = await connection.getAccountInfo(counterAccount.publicKey);

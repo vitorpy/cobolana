@@ -20,10 +20,12 @@ zig-out/
 deploy/
 *.log
 test-program-keypair.json
+test-counter-keypair.json
 src/cobolana/*.s
 
 # Claude Code
 .claude/
+.beads/
 
 # Parser debug output
 *.output
