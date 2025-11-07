@@ -34,3 +34,4 @@ test_minimal.c
 src/cobol_state.h
 src/libcob_bpf.h
 src/solana_shim.c
+target/
