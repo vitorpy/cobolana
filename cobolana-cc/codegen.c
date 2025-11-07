@@ -13,7 +13,35 @@
 #include "tree.h"
 
 #define MAX_VARIABLES 32
-#define ACCOUNT_DATA_START 0x0060  /* Start offset for variable data in Solana account */
+
+/*
+ * Solana Account Serialization Format (in input buffer pointed to by r1):
+ *
+ * 0x0000-0x0007: Number of accounts (u64)
+ * For each account:
+ *   - 0x0001: dup_info marker
+ *   - 0x0001: is_signer flag
+ *   - 0x0001: is_writable flag
+ *   - 0x0001: executable flag
+ *   - 0x0004: original_data_len (padding)
+ *   - 0x0020: account pubkey (32 bytes)
+ *   - 0x0020: owner pubkey (32 bytes)
+ *   - 0x0008: lamports (u64)
+ *   - 0x0008: data_len (u64)
+ *   - N bytes: account data
+ *   - padding to align to 8 bytes
+ *
+ * For a single writable account, the data starts at:
+ * 8 (num_accounts) + 1 (dup) + 1 (signer) + 1 (writable) + 1 (exec) + 4 (pad)
+ * + 32 (pubkey) + 32 (owner) + 8 (lamports) + 8 (data_len) = 96 = 0x0060
+ *
+ * COBOL WORKING-STORAGE variables are stored in the first (and only) account's data.
+ * The program expects accounts: [Data Account]
+ *
+ * This follows a minimalistic approach inspired by doppler (blueshift-gg/doppler.git)
+ * but uses the first account instead of requiring two accounts.
+ */
+#define ACCOUNT_DATA_START 0x0060  /* First account data start (WORKING-STORAGE) */
 
 /* Variable storage information */
 struct var_info {
@@ -22,11 +50,13 @@ struct var_info {
 	int size;          /* Size in bytes */
 	int reg;           /* Assigned register (0 = not loaded, 2-5 = r2-r5) */
 	int dirty;         /* Needs writeback */
+	long long default_value;  /* Default value from VALUE clause (0 if none) */
+	int has_default;   /* Whether this variable has a VALUE clause */
 };
 
 static struct var_info variables[MAX_VARIABLES];
 static int num_variables = 0;
-static int next_offset = ACCOUNT_DATA_START + 1;  /* +1 for initialized flag at offset 0x60 */
+static int next_offset = ACCOUNT_DATA_START + 1;  /* +1 for initialized flag at start of account data */
 
 /* Helper to sanitize field names for assembly labels */
 static void
@@ -56,7 +86,7 @@ find_variable(const char *name)
 
 /* Add a variable to our tracking table */
 static struct var_info *
-add_variable(const char *name, int size)
+add_variable(const char *name, int size, long long default_value, int has_default)
 {
 	if (num_variables >= MAX_VARIABLES) {
 		fprintf(stderr, "Error: Too many variables (max %d)\n", MAX_VARIABLES);
@@ -69,6 +99,8 @@ add_variable(const char *name, int size)
 	var->size = size;
 	var->reg = 0;
 	var->dirty = 0;
+	var->default_value = default_value;
+	var->has_default = has_default;
 
 	next_offset += size;
 	return var;
@@ -103,14 +135,31 @@ codegen(struct cb_program *prog, const char *translate_name)
 	 * First pass: Register all numeric variables
 	 */
 	fprintf(out, "# Variable offsets in account data:\n");
+	fprintf(out, "# Offset 0x%04x: initialized flag (1 byte)\n", ACCOUNT_DATA_START);
 	for (f = prog->working_storage; f; f = f->sister) {
 		/* Only handle numeric fields for now */
 		if (f->usage == CB_USAGE_DISPLAY || f->usage == CB_USAGE_BINARY ||
 		    f->usage == CB_USAGE_COMP_5 || f->usage == CB_USAGE_COMP_X) {
 			/* Determine size - for simplicity, use 8 bytes for all numerics */
 			int size = 8;
-			struct var_info *var = add_variable(f->name, size);
-			fprintf(out, "# %s: offset 0x%04x, size %d\n", var->name, var->offset, var->size);
+
+			/* Extract VALUE clause if present */
+			long long default_value = 0;
+			int has_default = 0;
+			if (f->values && CB_LITERAL_P(f->values)) {
+				struct cb_literal *val_lit = CB_LITERAL(f->values);
+				if (val_lit->scale == 0 && CB_TREE_CATEGORY(f->values) == CB_CATEGORY_NUMERIC) {
+					default_value = atoll((char*)val_lit->data);
+					has_default = 1;
+				}
+			}
+
+			struct var_info *var = add_variable(f->name, size, default_value, has_default);
+			fprintf(out, "# %s: offset 0x%04x, size %d", var->name, var->offset, var->size);
+			if (has_default) {
+				fprintf(out, ", VALUE %lld", default_value);
+			}
+			fprintf(out, "\n");
 		}
 	}
 	fprintf(out, "\n");
@@ -123,6 +172,34 @@ codegen(struct cb_program *prog, const char *translate_name)
 	fprintf(out, "entrypoint:\n");
 	fprintf(out, "  # Save input parameter pointer (r1) to r6\n");
 	fprintf(out, "  mov64 r6, r1\n");
+	fprintf(out, "\n");
+
+	/*
+	 * Emit initialization preamble
+	 * Check if account is already initialized, and if not, initialize all
+	 * WORKING-STORAGE variables to their VALUE clause defaults
+	 */
+	fprintf(out, "  # Check if account data is initialized\n");
+	fprintf(out, "  ldxb r2, [r6 + 0x%x]  # Load initialized flag\n", ACCOUNT_DATA_START);
+	fprintf(out, "  jne r2, 0, program_start  # If already initialized, skip to main logic\n");
+	fprintf(out, "\n");
+
+	fprintf(out, "  # Initialize WORKING-STORAGE variables to defaults\n");
+	for (int i = 0; i < num_variables; i++) {
+		struct var_info *var = &variables[i];
+		fprintf(out, "  # Initialize %s to %lld\n", var->name, var->default_value);
+		fprintf(out, "  lddw r2, %lld\n", var->default_value);
+		fprintf(out, "  stxdw [r6 + 0x%x], r2\n", var->offset);
+	}
+	fprintf(out, "\n");
+
+	fprintf(out, "  # Mark account as initialized\n");
+	fprintf(out, "  lddw r2, 1\n");
+	fprintf(out, "  stxb [r6 + 0x%x], r2\n", ACCOUNT_DATA_START);
+	fprintf(out, "\n");
+
+	fprintf(out, "program_start:\n");
+	fprintf(out, "  # Main program logic begins here\n");
 	fprintf(out, "\n");
 
 	/* Walk the execution list */

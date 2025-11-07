@@ -39,7 +39,7 @@ describe('Counter - COBOL Counter on Solana', () => {
       ./cobolana-cc ../src/counter.cob 2>&1 | grep -v "error:" | grep -v "warning:" || true
       cd ..
       mkdir -p src/cobolana
-      cp /tmp/cobtmp.c src/cobolana/counter.s
+      cp /tmp/cobtmp.c src/cobolana/cobolana.s
       /home/vitorpy/code/sbpf/target/release/sbpf build
       mkdir -p zig-out/lib
       cp deploy/cobolana.so zig-out/lib/counter.so
@@ -122,8 +122,8 @@ describe('Counter - COBOL Counter on Solana', () => {
     }
 
     // Create data account for counter storage
-    // Account needs space for COBOL variables (0x0060 + variable data)
-    // NUM-COUNTER is at offset 0x71, 8 bytes, so we need at least 0x79 bytes
+    // WORKING-STORAGE variables are stored in the second account's data
+    // NUM-COUNTER is at offset 0x01 within account data (0x28c0 + 0x01 in input buffer)
     // Using 256 bytes to be safe
     counterAccount = Keypair.generate();
     const accountSpace = 256;
@@ -171,9 +171,20 @@ describe('Counter - COBOL Counter on Solana', () => {
   });
 
   it('should increment counter on each call', async () => {
-    // Counter is at offset 0x71 in input buffer, which is 0x71 - 0x60 = 0x11 in account data
-    // (0x60 is where Solana account data starts in the input parameter buffer)
-    const COUNTER_OFFSET = 0x71 - 0x60; // = 0x11
+    // Solana account serialization:
+    // - The program receives ONE account (the data account) in the keys array
+    // - Program ID is NOT included in keys (it's passed separately in programId field)
+    // - First account data starts at offset 0x0060 in the input buffer
+    //
+    // Account data layout (relative to 0x0060):
+    // - 0x00: initialized flag (1 byte)
+    // - 0x01: TALLY (8 bytes)
+    // - 0x09: XML-EVENT (8 bytes)
+    // - 0x11: NUM-COUNTER (8 bytes) <-- this is what we're testing
+    //
+    // In the input buffer, NUM-COUNTER is at [r6 + 0x0071] = [r6 + 0x0060 + 0x11]
+    // When reading account data directly from the account, we read from offset 0x11
+    const COUNTER_OFFSET = 0x11;
 
     // Read initial counter value (should be 0)
     let accountInfo = await connection.getAccountInfo(counterAccount.publicKey);
@@ -187,6 +198,8 @@ describe('Counter - COBOL Counter on Solana', () => {
     for (let i = 1; i <= 5; i++) {
       const instruction = new TransactionInstruction({
         keys: [
+          // Account 0: Data account for WORKING-STORAGE (writable)
+          // NOTE: Do NOT include program ID in keys - it's passed separately via programId field
           {
             pubkey: counterAccount.publicKey,
             isSigner: false,
@@ -236,7 +249,7 @@ describe('Counter - COBOL Counter on Solana', () => {
   });
 
   it('should persist counter across multiple transactions', async () => {
-    const COUNTER_OFFSET = 0x71 - 0x60; // Account data offset
+    const COUNTER_OFFSET = 0x11; // NUM-COUNTER offset within account data
 
     // Get current counter value (should be 5 from previous test)
     let accountInfo = await connection.getAccountInfo(counterAccount.publicKey);
@@ -248,6 +261,7 @@ describe('Counter - COBOL Counter on Solana', () => {
     // Increment once more
     const instruction = new TransactionInstruction({
       keys: [
+        // Account 0: Data account for WORKING-STORAGE (writable)
         {
           pubkey: counterAccount.publicKey,
           isSigner: false,
